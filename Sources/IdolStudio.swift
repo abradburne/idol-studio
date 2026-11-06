@@ -29,6 +29,7 @@ final class Studio: ObservableObject {
     @Published var targeted = false
     private var job: Task<Void, Never>?
     private var jobID: UUID?
+    private var queuedID: UUID?
     private var inputTask: Task<Void, Never>?
 
     var hasResult: Bool { output == .splat ? result != nil : mesh != nil }
@@ -84,13 +85,13 @@ final class Studio: ObservableObject {
         }
     }
 
-    func generate(model: URL) {
+    func generate() {
         guard let image, job == nil, !importing else { return }
         let id = UUID()
         jobID = id
         error = nil
         message = nil
-        progress = GenerationProgress("Preparing generation…")
+        progress = GenerationProgress("Adding to queue…")
         let output = output
         let mode = mode
         let detail = detail
@@ -99,43 +100,60 @@ final class Studio: ObservableObject {
                 if jobID == id {
                     job = nil
                     jobID = nil
+                    queuedID = nil
                     progress = nil
                 }
             }
+            let queue = JobQueue.shared
             do {
-                let report: (GenerationProgress) -> Void = { [self] update in
-                    if jobID == id { progress = update }
+                let queued = try await queue.enqueue(image: image, format: output == .splat ? .splatGLB : .meshGLB,
+                                                     detail: detail, inputMode: mode)
+                if Task.isCancelled {
+                    try queue.cancel(queued.id)
+                    return
                 }
-                switch output {
-                case .splat:
-                    let splat = try await Engine.shared.generate(image, model: model, mode: mode, steps: detail.steps,
-                                                                 count: detail.rawValue, progress: report)
+                queuedID = queued.id
+                try QueueWorker.startIfNeeded(queue)
+                var item = try queue.job(queued.id)
+                while item.state.active {
+                    progress = item.progress ?? GenerationProgress(item.state == .queued ? "Waiting in queue…" : "Starting generation…")
+                    try await Task.sleep(for: .milliseconds(300))
+                    item = try queue.job(queued.id)
+                }
+                if item.state == .cancelled { return }
+                guard item.state == .completed else { throw StudioError(item.error ?? "Generation failed.") }
+                let url = queue.output(item)
+                if output == .splat {
+                    let splat = try await Task.detached { try Splat(glb: Data(contentsOf: url)) }.value
                     try Task.checkCancellation()
                     guard let device = MTLCreateSystemDefaultDevice() else { throw StudioError("Metal is unavailable on this Mac.") }
                     renderer = try SplatRenderer(splat: splat, device: device)
                     result = splat
-                case .mesh:
-                    let generated = try await Engine.shared.generateMesh(image, model: model, progress: report)
+                } else {
+                    let generated = try await Task.detached { try TexturedMesh(glb: Data(contentsOf: url)) }.value
                     try Task.checkCancellation()
                     meshScene = generated.makeScene()
                     mesh = generated
                 }
             } catch {
-                if !Task.isCancelled {
-                    Engine.shared.stop()
-                    self.error = error.localizedDescription
-                }
+                if !Task.isCancelled { self.error = error.localizedDescription }
             }
         }
     }
 
     func cancel() {
         guard let job else { return }
+        do {
+            if let queuedID { try JobQueue.shared.cancel(queuedID) }
+        } catch {
+            self.error = error.localizedDescription
+            return
+        }
         job.cancel()
         self.job = nil
         jobID = nil
+        queuedID = nil
         progress = nil
-        Engine.shared.stop()
     }
 
     func export(_ fileExtension: String) {
@@ -166,6 +184,7 @@ final class Studio: ObservableObject {
 }
 
 struct StudioView: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var studio: Studio
     @ObservedObject var model: ModelStore
     @ObservedObject var meshModel: ModelStore
@@ -225,6 +244,7 @@ struct StudioView: View {
                 caption("ON-DEVICE IMAGE TO 3D")
             }
             Spacer()
+            Button("Queue", systemImage: "list.bullet") { openWindow(id: "queue") }
             Button("Open Image…", systemImage: "photo") { studio.chooseImage() }
                 .help("Choose a source image (⌘O)")
             Button("Paste Image", systemImage: "clipboard") { studio.pasteImage() }
@@ -316,7 +336,7 @@ struct StudioView: View {
                 }
             }
             Button {
-                if studio.progress == nil { studio.generate(model: activeModel.directory) }
+                if studio.progress == nil { studio.generate() }
                 else { studio.cancel() }
             } label: {
                 Label(studio.progress == nil ? "Generate \(studio.output.rawValue)" : "Cancel Generation",
@@ -414,6 +434,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 enum Entry {
     static func main() {
+        if CommandLine.arguments.dropFirst().first == "--mcp" {
+            Task { await LocalMCP.run(); exit(0) }
+            dispatchMain()
+        }
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--queue-worker" {
+            let root = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
+            Task { @MainActor in
+                do {
+                    try await QueueWorker.run(JobQueue(root: root))
+                    exit(0)
+                } catch {
+                    FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+                    exit(1)
+                }
+            }
+            dispatchMain()
+        }
         if CommandLine.arguments.dropFirst().first == "--smoke-test" {
             Task { @MainActor in
                 do {
@@ -459,6 +496,10 @@ struct IdolStudio: App {
     var body: some Scene {
         Window("Idol Studio", id: "studio") {
             StudioView(studio: studio, model: model, meshModel: meshModel)
+                .task {
+                    do { try QueueWorker.startIfNeeded() }
+                    catch { studio.error = error.localizedDescription }
+                }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     model.refresh()
                     meshModel.refresh()
@@ -474,6 +515,11 @@ struct IdolStudio: App {
                 .keyboardShortcut("e").disabled(!studio.hasResult)
             }
         }
+        Window("Generation Queue", id: "queue") {
+            QueueView()
+        }
+        .defaultSize(width: 720, height: 480)
+        .defaultLaunchBehavior(.suppressed)
         Settings {
             StudioSettings(model: model, meshModel: meshModel, studio: studio)
         }

@@ -5,13 +5,13 @@ import ImageIO
 import UniformTypeIdentifiers
 import Vision
 
-enum InputMode: String, CaseIterable, Identifiable, Sendable {
+enum InputMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case real, synthetic
     var id: Self { self }
     var label: String { self == .real ? "Photo" : "Render" }
 }
 
-enum Detail: Int, CaseIterable, Identifiable {
+enum Detail: Int, Codable, CaseIterable, Identifiable, Sendable {
     case draft = 32768, standard = 262144, high = 1048576
     var id: Self { self }
     var label: String {
@@ -94,8 +94,8 @@ struct InputImage: Sendable {
     }
 }
 
-struct GenerationProgress: Sendable {
-    enum Stage: Int, CaseIterable {
+struct GenerationProgress: Codable, Sendable {
+    enum Stage: Int, Codable, CaseIterable {
         case setup, image, shape, gaussians, texture, preview
 
         var label: String {
@@ -147,19 +147,6 @@ final class Engine {
             throw StudioError("The bundled MLX engine is missing. Rebuild Idol Studio with scripts/setup.sh.")
         }
         return engine
-    }
-
-    func stop() {
-        guard let old = server else { return }
-        server = nil
-        if old.process.isRunning { old.process.terminate() }
-        let process = old.process
-        let directory = old.directory
-        Task {
-            try? await Task.sleep(for: .seconds(2))
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            try? FileManager.default.removeItem(at: directory)
-        }
     }
 
     func shutdown() {
@@ -228,7 +215,7 @@ final class Engine {
             }
             throw StudioError("The local generation engine did not start within 30 seconds.")
         } catch {
-            if server?.process === process { stop() }
+            if server?.process === process { shutdown() }
             else { try? FileManager.default.removeItem(at: directory) }
             throw error
         }

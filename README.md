@@ -28,4 +28,23 @@ With Xcode installed, run these commands from the project folder.
 open ".build/Idol Studio.app"
 ```
 
+## Batch queue and MCP
+
+These features are available in source builds. Open **Queue**, choose an output format, and add images or a folder. Studio keeps a copy of each input and runs one job at a time. The queue shows progress, lets you cancel or retry jobs, and opens finished files in Finder. Install the IDOL or Hunyuan3D model in Settings before generating its output.
+
+To connect a local MCP client, configure it to launch the app executable with `--mcp`. Use the absolute path to your installed or built copy.
+
+```json
+{
+  "command": "/Applications/Idol Studio.app/Contents/MacOS/IdolStudio",
+  "args": ["--mcp"]
+}
+```
+
+- `generate_3d` takes an absolute `image_path` or a list of `image_paths` and returns job IDs. Choose `splat_ply`, `splat_glb`, or `mesh_glb`.
+- `job_status` takes a `job_id` and returns progress or the finished file’s local path.
+- `cancel_job` takes a `job_id` and stops a queued or running job.
+
+The app and MCP clients share the same queue. The worker can continue after a client disconnects.
+
 Powered by [IDOL](https://github.com/speridlabs/idol-sdk) and [MLX-Serve](https://github.com/ddalcu/mlx-serve). The robot image is from the [IDOL demo gallery](https://github.com/speridlabs/idol-sdk/blob/main/demo/examples/fig-robot-cute.webp).
