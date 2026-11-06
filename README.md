@@ -1,6 +1,6 @@
 # Idol Studio
 
-Turn a single image into a 3D Gaussian splat on your Mac. Drop in a photo or render, generate with IDOL, and inspect the result in an interactive Metal viewer. Everything runs locally with no Python.
+Turn a single image into a 3D Gaussian splat on your Mac. Drop or paste a photo or render, generate with IDOL, and inspect the result in an interactive Metal viewer. Everything runs locally with no Python.
 
 ![Idol Studio showing a robot image and its generated 3D Gaussian splat](docs/idol-studio.png)
 
@@ -10,7 +10,7 @@ Requires **Apple Silicon** and **macOS 26.2 or later**.
 
 1. Open the signed DMG and drag **Idol Studio** into **Applications**.
 2. On first launch, download the **3.57 GB** model. You can choose where to store it or select an existing model folder. Manage it later in **Settings (⌘,)**.
-3. Drop in an image and click **Generate Splat**. Drag to orbit, Shift-drag to pan, and scroll to zoom.
+3. Drop in an image or paste one with **⌘V**, then click **Generate Splat**. Drag to orbit, Shift-drag to pan, and scroll to zoom.
 4. Use **Export** to save a Gaussian splat as **PLY** or **GLB**.
 
 ## Build from source

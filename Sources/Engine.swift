@@ -23,21 +23,33 @@ enum Detail: Int, CaseIterable, Identifiable {
 }
 
 struct InputImage: Sendable {
-    let url: URL
+    let name: String
+    let title: String
     let preview: CGImage
-    var title: String { url.deletingPathExtension().lastPathComponent }
 
     @concurrent
     static func read(_ url: URL) async throws -> Self {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 1024
-              ] as CFDictionary) else {
+        guard let preview = thumbnail(from: CGImageSourceCreateWithURL(url as CFURL, nil)) else {
             throw StudioError("Couldn’t open this image. Try a JPG, PNG, HEIC, or WebP.")
         }
-        return Self(url: url, preview: image)
+        return Self(name: url.lastPathComponent, title: url.deletingPathExtension().lastPathComponent, preview: preview)
+    }
+
+    @concurrent
+    static func readClipboard(_ data: Data) async throws -> Self {
+        guard let preview = thumbnail(from: CGImageSourceCreateWithData(data as CFData, nil)) else {
+            throw StudioError("Couldn’t read the clipboard image.")
+        }
+        return Self(name: "Pasted Image", title: "Pasted Image", preview: preview)
+    }
+
+    private static func thumbnail(from source: CGImageSource?) -> CGImage? {
+        guard let source else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1024
+        ] as CFDictionary)
     }
 
     func png() throws -> Data {

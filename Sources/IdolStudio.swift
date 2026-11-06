@@ -28,13 +28,35 @@ final class Studio: ObservableObject {
     }
 
     func open(_ url: URL) {
+        importImage { try await InputImage.read(url) }
+    }
+
+    func pasteImage(from pasteboard: NSPasteboard = .general) {
+        let imageType = pasteboard.availableType(from: [.png, .tiff])
+            ?? pasteboard.types?.first { UTType($0.rawValue)?.conforms(to: .image) == true }
+        if let imageType, let data = pasteboard.data(forType: imageType) {
+            importImage { try await InputImage.readClipboard(data) }
+            return
+        }
+
+        let files = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
+        if let url = files?.first(where: {
+            (try? $0.resourceValues(forKeys: [.contentTypeKey]).contentType)?.conforms(to: .image) == true
+        }) {
+            open(url)
+        } else {
+            error = "Copy an image or an image file, then paste it here."
+        }
+    }
+
+    private func importImage(_ read: @escaping () async throws -> InputImage) {
         inputTask?.cancel()
         importing = true
         error = nil
         inputTask = Task {
             defer { if !Task.isCancelled { importing = false } }
             do {
-                let input = try await InputImage.read(url)
+                let input = try await read()
                 try Task.checkCancellation()
                 cancel()
                 image = input
@@ -169,6 +191,9 @@ struct StudioView: View {
             Spacer()
             Button("Open Image…", systemImage: "photo") { studio.chooseImage() }
                 .help("Choose a source image (⌘O)")
+            Button("Paste Image", systemImage: "clipboard") { studio.pasteImage() }
+                .keyboardShortcut("v")
+                .help("Paste a source image (⌘V)")
             Menu {
                 Button("Gaussian Splat (.ply)") { studio.export("ply") }
                 Button("Gaussian Splat glTF (.glb)") { studio.export("glb") }
@@ -197,8 +222,8 @@ struct StudioView: View {
                         VStack(spacing: 9) {
                             Image(systemName: "photo.badge.plus")
                                 .font(.system(size: 24, weight: .light)).foregroundStyle(accent)
-                            Text("Drop an image").font(.system(size: 14, weight: .medium))
-                            Text("or click to browse").font(.system(size: 11)).foregroundStyle(.secondary)
+                            Text("Drop or paste an image").font(.system(size: 14, weight: .medium))
+                            Text("⌘V or click to browse").font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -206,11 +231,11 @@ struct StudioView: View {
                 .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(rule) }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(studio.image == nil ? "Drop an image or browse" : "Replace source image")
+            .accessibilityLabel(studio.image == nil ? "Drop or paste an image, or browse" : "Replace source image")
 
             if let image = studio.image {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(image.url.lastPathComponent).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                    Text(image.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
                     Text("\(image.preview.width) × \(image.preview.height) input")
                         .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 }
@@ -275,7 +300,7 @@ struct StudioView: View {
                             .foregroundStyle(accent.opacity(0.82))
                             .padding(.bottom, 8)
                         Text("Splat viewport").font(.system(size: 23, weight: .medium))
-                        Text(studio.image == nil ? "Drop a photo or render to get started." : "Generate a splat to inspect it here.")
+                        Text(studio.image == nil ? "Drop or paste a photo or render to get started." : "Generate a splat to inspect it here.")
                             .font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                 }
