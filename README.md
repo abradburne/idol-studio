@@ -4,7 +4,7 @@
 
 Apple Silicon · macOS 26.2+ · Signed and notarized
 
-Turn a single image into a 3D Gaussian splat on your Mac. Drop or paste a photo or render, generate with IDOL, and inspect the result in an interactive Metal viewer. Everything runs locally with no Python.
+Turn a single image into a 3D Gaussian splat on your Mac. Drop or paste a photo or render, generate with IDOL, and inspect the result in an interactive Metal viewer. Everything runs locally.
 
 ![Idol Studio showing a robot image and its generated 3D Gaussian splat](docs/idol-studio.png)
 
