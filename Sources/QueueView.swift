@@ -3,14 +3,21 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct QueueView: View {
+    private struct Deletion {
+        let ids: Set<UUID>
+        let title: String
+    }
+
     @State private var jobs: [GenerationJob] = []
     @State private var format: JobFormat = .splatPLY
     @State private var detail: Detail = .standard
     @State private var inputMode: InputMode = .real
     @State private var adding = false
     @State private var error: String?
+    @State private var deletion: Deletion?
 
     private let queue = JobQueue.shared
+    private var finishedIDs: Set<UUID> { Set(jobs.filter { !$0.state.active }.map(\.id)) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +35,15 @@ struct QueueView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 650, minHeight: 390)
+        .alert(deletion?.title ?? "Delete jobs?", isPresented: Binding(
+            get: { deletion != nil },
+            set: { if !$0 { deletion = nil } }
+        ), presenting: deletion) { request in
+            Button("Move to Trash", role: .destructive) { perform { try queue.deleteFinished(request.ids) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This removes the jobs from the queue and moves its copies of the source images and generated files to the Trash. Original images and exported files stay where you saved them.")
+        }
         .task {
             perform { try QueueWorker.startIfNeeded() }
             while !Task.isCancelled {
@@ -62,6 +78,11 @@ struct QueueView: View {
                 Text("One generation at a time")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Button("Clear Finished…", systemImage: "trash") {
+                    let ids = finishedIDs
+                    deletion = Deletion(ids: ids, title: "Clear \(ids.count) finished \(ids.count == 1 ? "job" : "jobs")?")
+                }
+                .disabled(finishedIDs.isEmpty)
             }
             .disabled(adding)
             if let error {
@@ -98,8 +119,18 @@ struct QueueView: View {
                 case .cancelling:
                     ProgressView().controlSize(.small)
                 }
+                if !job.state.active {
+                    Button {
+                        deletion = Deletion(ids: [job.id], title: "Delete “\(job.name)” from the queue?")
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .accessibilityLabel("Delete \(job.name)")
+                    .help("Delete job…")
+                }
             }
             .padding(.vertical, 4)
+            .buttonStyle(.bordered)
         }
         .listStyle(.plain)
     }

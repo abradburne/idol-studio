@@ -58,8 +58,12 @@ struct JobQueue: Sendable {
         try withStateLock { try read() }
     }
 
+    func find(_ id: UUID) throws -> GenerationJob? {
+        try list().first { $0.id == id }
+    }
+
     func job(_ id: UUID) throws -> GenerationJob {
-        guard let job = try list().first(where: { $0.id == id }) else { throw StudioError("Job not found.") }
+        guard let job = try find(id) else { throw StudioError("Job not found.") }
         return job
     }
 
@@ -131,6 +135,32 @@ struct JobQueue: Sendable {
             job.error = nil
             jobs.append(job)
             try write(jobs)
+        }
+    }
+
+    func deleteFinished(_ ids: Set<UUID>) throws {
+        try withStateLock {
+            let jobs = try read()
+            let selected = Set(jobs.filter { ids.contains($0.id) && !$0.state.active }.map(\.id))
+            guard !selected.isEmpty else { return }
+            try write(jobs.filter { !selected.contains($0.id) })
+
+            var trashed = Set<UUID>()
+            var failure: Error?
+            for id in selected {
+                do {
+                    try FileManager.default.trashItem(at: folder(id), resultingItemURL: nil)
+                    trashed.insert(id)
+                } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+                    trashed.insert(id)
+                } catch {
+                    failure = error
+                }
+            }
+            if let failure {
+                try write(jobs.filter { !trashed.contains($0.id) })
+                throw StudioError("Couldn’t move some queue files to the Trash. \(failure.localizedDescription)")
+            }
         }
     }
 

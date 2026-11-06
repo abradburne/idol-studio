@@ -114,13 +114,13 @@ final class Studio: ObservableObject {
                 }
                 queuedID = queued.id
                 try QueueWorker.startIfNeeded(queue)
-                var item = try queue.job(queued.id)
-                while item.state.active {
-                    progress = item.progress ?? GenerationProgress(item.state == .queued ? "Waiting in queue…" : "Starting generation…")
+                var item = try queue.find(queued.id)
+                while let active = item, active.state.active {
+                    progress = active.progress ?? GenerationProgress(active.state == .queued ? "Waiting in queue…" : "Starting generation…")
                     try await Task.sleep(for: .milliseconds(300))
-                    item = try queue.job(queued.id)
+                    item = try queue.find(queued.id)
                 }
-                if item.state == .cancelled { return }
+                guard let item, item.state != .cancelled else { return }
                 guard item.state == .completed else { throw StudioError(item.error ?? "Generation failed.") }
                 let url = queue.output(item)
                 if output == .splat {
@@ -136,7 +136,9 @@ final class Studio: ObservableObject {
                     mesh = generated
                 }
             } catch {
-                if !Task.isCancelled { self.error = error.localizedDescription }
+                guard !Task.isCancelled else { return }
+                if let queuedID, (try? queue.list().contains(where: { $0.id == queuedID })) == false { return }
+                self.error = error.localizedDescription
             }
         }
     }
