@@ -6,7 +6,7 @@ Apple Silicon · macOS 26.2+ · Signed and notarized
 
 <!-- Attach the signed, notarized DMG as Idol-Studio.dmg before publishing each release. -->
 
-Turn a single image into a 3D Gaussian splat on your Mac. Drop or paste a photo or render, generate with IDOL, and inspect the result in an interactive Metal viewer. Everything runs locally.
+Turn a single image into a 3D asset on your Mac. Generate a Gaussian splat with IDOL or a textured mesh with Hunyuan3D 2.1, then inspect and export the result. Everything runs locally.
 
 ![Idol Studio showing a robot image and its generated 3D Gaussian splat](docs/idol-studio.png)
 
@@ -15,9 +15,9 @@ Turn a single image into a 3D Gaussian splat on your Mac. Drop or paste a photo 
 Requires **Apple Silicon** and **macOS 26.2 or later**.
 
 1. Open the signed DMG and drag **Idol Studio** into **Applications**.
-2. On first launch, download the **3.57 GB** model. You can choose where to store it or select an existing model folder. Manage it later in **Settings (⌘,)**.
-3. Drop in an image or paste one with **⌘V**, then click **Generate Splat**. Drag to orbit, Shift-drag to pan, and scroll to zoom.
-4. Use **Export** to save a Gaussian splat as **PLY** or **GLB**.
+2. Choose Splat or Mesh and download its model. IDOL uses 3.57 GB and Hunyuan3D uses 8.36 GB. You can choose where to store it or select an existing model folder. Manage it later in **Settings (⌘,)**.
+3. Drop in an image or paste one with **⌘V**, then click **Generate Splat** or **Generate Mesh**. Drag to orbit, Shift-drag to pan, and scroll to zoom.
+4. Use **Export** to save a splat as **PLY** or **GLB**, or a textured mesh as **GLB**.
 
 ## Build from source
 
@@ -30,7 +30,7 @@ open ".build/Idol Studio.app"
 
 ## Batch queue and MCP
 
-These features are available in source builds. Open **Queue**, choose an output format, and add images or a folder. Studio keeps a copy of each input and runs one job at a time. The queue shows progress, lets you cancel or retry jobs, and opens finished files in Finder. Install the IDOL or Hunyuan3D model in Settings before generating its output.
+Open **Queue**, choose an output format, and add images or a folder. Studio keeps a copy of each input and runs one job at a time. The queue shows progress, lets you cancel or retry jobs, and opens finished files in Finder. Install the IDOL or Hunyuan3D model in Settings before generating its output.
 
 To connect a local MCP client, configure it to launch the app executable with `--mcp`. Use the absolute path to your installed or built copy.
 
