@@ -5,56 +5,54 @@ struct ModelSetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Label("WELCOME TO IDOL STUDIO", systemImage: "circle.hexagongrid.fill")
+            Label("LOCAL MODEL", systemImage: "circle.hexagongrid.fill")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .tracking(2)
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 9) {
-                Text("Set up the IDOL model")
+                Text("Set up \(model.pack.name)")
                     .font(.system(size: 29, weight: .semibold))
-                Text("Download the \(model.sizeLabel) model pack once. Idol Studio uses it to turn images into 3D splats entirely on this Mac.")
+                Text("Download \(model.sizeLabel) once to generate \(model.pack == .idol ? "Gaussian splats" : "textured meshes") on this Mac.")
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ModelControls(model: model, busy: false)
         }
-        .padding(32)
-        .frame(maxWidth: 600)
+        .padding(24)
+        .frame(maxWidth: 460)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
         .overlay { RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.09)) }
         .padding(28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(red: 0.067, green: 0.071, blue: 0.09))
-        .preferredColorScheme(.dark)
         .tint(Color(red: 0.68, green: 0.88, blue: 0.51))
-        .frame(minWidth: 660, minHeight: 450)
     }
 }
 
 struct StudioSettings: View {
     @ObservedObject var model: ModelStore
+    @ObservedObject var meshModel: ModelStore
     @ObservedObject var studio: Studio
 
     var body: some View {
         Form {
-            Section("Model storage") {
-                LabeledContent("Model", value: "IDOL · MLX FP16")
-                LabeledContent("Status", value: model.installed ? "Installed · \(model.sizeLabel)" : "Download required · \(model.sizeLabel)")
-                ModelControls(model: model, busy: studio.progress != nil)
+            ForEach([model, meshModel], id: \.pack) { store in
+                Section(store.pack.name) {
+                    LabeledContent("Status", value: store.installed ? "Installed · \(store.sizeLabel)" : "Download required · \(store.sizeLabel)")
+                    ModelControls(model: store, busy: studio.progress != nil)
+                    Link("View the model pack", destination: store.pack.repository)
+                }
             }
             Section("About Idol Studio") {
                 LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
                 LabeledContent("Inference", value: "On-device MLX · Apple Silicon")
-                LabeledContent("Exports", value: "Gaussian PLY and glTF (GLB)")
-                Link("View the IDOL model pack", destination: ModelStore.repository)
+                LabeledContent("Exports", value: "Gaussian PLY / GLB and textured mesh GLB")
             }
         }
         .formStyle(.grouped)
         .frame(width: 580)
         .padding(.vertical, 8)
         .fixedSize(horizontal: false, vertical: true)
-        .onAppear { model.refresh() }
+        .onAppear { model.refresh(); meshModel.refresh() }
     }
 }
 

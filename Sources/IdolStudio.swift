@@ -1,16 +1,27 @@
 import AppKit
 import Metal
+import SceneKit
 import SwiftUI
 import UniformTypeIdentifiers
+
+enum OutputMode: String, CaseIterable, Identifiable {
+    case splat = "Splat"
+    case mesh = "Mesh"
+
+    var id: Self { self }
+}
 
 @MainActor
 final class Studio: ObservableObject {
     @Published var image: InputImage?
     @Published var mode: InputMode = .real
+    @Published var output: OutputMode = .splat
     @Published var detail: Detail = .standard
     @Published var progress: GenerationProgress?
     @Published var result: Splat?
     @Published var renderer: SplatRenderer?
+    @Published var mesh: TexturedMesh?
+    @Published var meshScene: SCNScene?
     @Published var error: String?
     @Published var message: String?
     @Published var resetCount = 0
@@ -19,6 +30,8 @@ final class Studio: ObservableObject {
     private var job: Task<Void, Never>?
     private var jobID: UUID?
     private var inputTask: Task<Void, Never>?
+
+    var hasResult: Bool { output == .splat ? result != nil : mesh != nil }
 
     func chooseImage() {
         let panel = NSOpenPanel()
@@ -62,6 +75,8 @@ final class Studio: ObservableObject {
                 image = input
                 result = nil
                 renderer = nil
+                mesh = nil
+                meshScene = nil
                 message = nil
             } catch {
                 if !Task.isCancelled { self.error = error.localizedDescription }
@@ -75,7 +90,8 @@ final class Studio: ObservableObject {
         jobID = id
         error = nil
         message = nil
-        progress = GenerationProgress("Preparing IDOL…")
+        progress = GenerationProgress("Preparing generation…")
+        let output = output
         let mode = mode
         let detail = detail
         job = Task {
@@ -87,13 +103,23 @@ final class Studio: ObservableObject {
                 }
             }
             do {
-                let splat = try await Engine.shared.generate(image, model: model, mode: mode, steps: detail.steps, count: detail.rawValue) {
-                    if jobID == id { progress = $0 }
+                let report: (GenerationProgress) -> Void = { [self] update in
+                    if jobID == id { progress = update }
                 }
-                try Task.checkCancellation()
-                guard let device = MTLCreateSystemDefaultDevice() else { throw StudioError("Metal is unavailable on this Mac.") }
-                renderer = try SplatRenderer(splat: splat, device: device)
-                result = splat
+                switch output {
+                case .splat:
+                    let splat = try await Engine.shared.generate(image, model: model, mode: mode, steps: detail.steps,
+                                                                 count: detail.rawValue, progress: report)
+                    try Task.checkCancellation()
+                    guard let device = MTLCreateSystemDefaultDevice() else { throw StudioError("Metal is unavailable on this Mac.") }
+                    renderer = try SplatRenderer(splat: splat, device: device)
+                    result = splat
+                case .mesh:
+                    let generated = try await Engine.shared.generateMesh(image, model: model, progress: report)
+                    try Task.checkCancellation()
+                    meshScene = generated.makeScene()
+                    mesh = generated
+                }
             } catch {
                 if !Task.isCancelled {
                     Engine.shared.stop()
@@ -113,16 +139,23 @@ final class Studio: ObservableObject {
     }
 
     func export(_ fileExtension: String) {
-        guard let result else { return }
+        let output = output
+        let result = result
+        let mesh = mesh
+        guard output == .splat ? result != nil : mesh != nil && fileExtension == "glb" else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: fileExtension) ?? .data]
-        panel.nameFieldStringValue = (image?.title ?? "Idol Splat") + "." + fileExtension
+        panel.nameFieldStringValue = (image?.title ?? "Idol Model") + (output == .mesh ? "-mesh." : ".") + fileExtension
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task {
             do {
                 try await Task.detached(priority: .userInitiated) {
-                    try (fileExtension == "ply" ? result.ply() : result.glb).write(to: url, options: .atomic)
+                    if output == .mesh, let mesh {
+                        try mesh.glb.write(to: url, options: .atomic)
+                    } else if let result {
+                        try (fileExtension == "ply" ? result.ply() : result.glb).write(to: url, options: .atomic)
+                    }
                 }.value
                 message = "Exported \(url.lastPathComponent)"
             } catch {
@@ -135,6 +168,9 @@ final class Studio: ObservableObject {
 struct StudioView: View {
     @ObservedObject var studio: Studio
     @ObservedObject var model: ModelStore
+    @ObservedObject var meshModel: ModelStore
+
+    private var activeModel: ModelStore { studio.output == .splat ? model : meshModel }
     private let ink = Color(red: 0.067, green: 0.071, blue: 0.09)
     private let accent = Color(red: 0.76, green: 0.96, blue: 0.57)
     private let rule = Color.white.opacity(0.10)
@@ -186,7 +222,7 @@ struct StudioView: View {
                 .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
             VStack(alignment: .leading, spacing: 3) {
                 Text("Idol Studio").font(.system(size: 19, weight: .semibold))
-                caption("IMAGE TO GAUSSIAN SPLAT")
+                caption("ON-DEVICE IMAGE TO 3D")
             }
             Spacer()
             Button("Open Image…", systemImage: "photo") { studio.chooseImage() }
@@ -195,13 +231,17 @@ struct StudioView: View {
                 .keyboardShortcut("v")
                 .help("Paste a source image (⌘V)")
             Menu {
-                Button("Gaussian Splat (.ply)") { studio.export("ply") }
-                Button("Gaussian Splat glTF (.glb)") { studio.export("glb") }
+                if studio.output == .splat {
+                    Button("Gaussian Splat (.ply)") { studio.export("ply") }
+                    Button("Gaussian Splat glTF (.glb)") { studio.export("glb") }
+                } else {
+                    Button("Textured Mesh (.glb)") { studio.export("glb") }
+                }
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
             .fixedSize()
-            .disabled(studio.result == nil)
+            .disabled(!studio.hasResult)
         }
         .padding(.horizontal, 21)
         .frame(height: 65)
@@ -244,13 +284,23 @@ struct StudioView: View {
             Rectangle().fill(rule).frame(height: 1)
             caption("02  /  GENERATION")
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Source", selection: $studio.mode) {
-                    ForEach(InputMode.allCases) { Text($0.label).tag($0) }
+                Picker("Output", selection: $studio.output) {
+                    ForEach(OutputMode.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .help("Photo leaves more room around the subject. Render uses a tighter crop.")
-                Picker("Detail", selection: $studio.detail) {
-                    ForEach(Detail.allCases) { Text($0.label).tag($0) }
+                if studio.output == .splat {
+                    Picker("Source", selection: $studio.mode) {
+                        ForEach(InputMode.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("Photo leaves more room around the subject. Render uses a tighter crop.")
+                    Picker("Detail", selection: $studio.detail) {
+                        ForEach(Detail.allCases) { Text($0.label).tag($0) }
+                    }
+                } else {
+                    Text("Hunyuan3D 2.1 · Textured GLB")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                 }
             }
             .disabled(studio.progress != nil)
@@ -266,10 +316,10 @@ struct StudioView: View {
                 }
             }
             Button {
-                if studio.progress == nil { studio.generate(model: model.directory) }
+                if studio.progress == nil { studio.generate(model: activeModel.directory) }
                 else { studio.cancel() }
             } label: {
-                Label(studio.progress == nil ? "Generate Splat" : "Cancel Generation",
+                Label(studio.progress == nil ? "Generate \(studio.output.rawValue)" : "Cancel Generation",
                       systemImage: studio.progress == nil ? "sparkles" : "stop.circle")
                     .font(.system(size: 13, weight: .semibold))
                     .frame(maxWidth: .infinity, minHeight: 41)
@@ -277,8 +327,8 @@ struct StudioView: View {
             .buttonStyle(.plain)
             .foregroundStyle(studio.progress == nil ? ink : .white)
             .background(studio.progress == nil ? accent : Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-            .opacity(studio.image == nil ? 0.34 : 1)
-            .disabled(studio.image == nil || studio.importing)
+            .opacity(studio.progress == nil && (studio.image == nil || !activeModel.installed) ? 0.34 : 1)
+            .disabled(studio.progress == nil && (studio.image == nil || studio.importing || !activeModel.installed))
         }
         .padding(20)
         .background(Color.white.opacity(0.027))
@@ -286,21 +336,26 @@ struct StudioView: View {
 
     private var viewport: some View {
         ZStack {
-            if let renderer = studio.renderer {
+            if studio.output == .splat, let renderer = studio.renderer {
                 SplatViewer(renderer: renderer, resetCount: studio.resetCount)
+            } else if studio.output == .mesh, let scene = studio.meshScene {
+                MeshViewer(scene: scene, resetCount: studio.resetCount)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 RadialGradient(colors: [Color(red: 0.11, green: 0.13, blue: 0.17), ink], center: .center,
                                startRadius: 5, endRadius: 350)
-                if let progress = studio.progress {
-                    GenerationMonitor(progress: progress)
+                if !activeModel.installed {
+                    ModelSetupView(model: activeModel)
+                } else if let progress = studio.progress {
+                    GenerationMonitor(progress: progress, output: studio.output)
                 } else {
                     VStack(spacing: 13) {
                         Image(systemName: "cube.transparent")
                             .font(.system(size: 61, weight: .ultraLight))
                             .foregroundStyle(accent.opacity(0.82))
                             .padding(.bottom, 8)
-                        Text("Splat viewport").font(.system(size: 23, weight: .medium))
-                        Text(studio.image == nil ? "Drop or paste a photo or render to get started." : "Generate a splat to inspect it here.")
+                        Text("\(studio.output.rawValue) viewport").font(.system(size: 23, weight: .medium))
+                        Text(studio.image == nil ? "Drop or paste a photo or render to get started." : "Generate a \(studio.output.rawValue.lowercased()) to inspect it here.")
                             .font(.system(size: 13)).foregroundStyle(.secondary)
                     }
                 }
@@ -309,13 +364,13 @@ struct StudioView: View {
                 HStack {
                     caption("03  /  VIEWPORT")
                     Spacer()
-                    if studio.renderer != nil {
+                    if studio.hasResult {
                         Button("Reset View", systemImage: "arrow.counterclockwise") { studio.resetCount += 1 }
                     }
                 }
                 Spacer()
-                if studio.renderer != nil {
-                    Text("Drag to orbit   ·   Shift-drag to pan   ·   Scroll to zoom")
+                if studio.hasResult {
+                    Text(studio.output == .splat ? "Drag to orbit   ·   Shift-drag to pan   ·   Scroll to zoom" : "Drag to orbit   ·   Scroll to zoom")
                         .font(.system(size: 11, design: .monospaced))
                         .padding(.vertical, 7).padding(.horizontal, 10)
                         .background(.black.opacity(0.42), in: Capsule())
@@ -330,10 +385,11 @@ struct StudioView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Circle().fill(accent).frame(width: 6, height: 6)
-            Text("IDOL · LOCAL MLX")
+            Text("\(activeModel.pack.name.uppercased()) · LOCAL MLX")
             Spacer()
             if let message = studio.message { Text(message).lineLimit(1) }
-            else if let result = studio.result { Text("\(result.points.count.formatted()) Gaussians") }
+            else if studio.output == .splat, let result = studio.result { Text("\(result.points.count.formatted()) Gaussians") }
+            else if studio.output == .mesh, let mesh = studio.mesh { Text("\(mesh.triangleCount.formatted()) triangles") }
             else { Text("Apple Silicon") }
         }
         .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -398,30 +454,28 @@ struct IdolStudio: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var studio = Studio()
     @StateObject private var model = ModelStore()
+    @StateObject private var meshModel = ModelStore(pack: .hunyuan)
 
     var body: some Scene {
         Window("Idol Studio", id: "studio") {
-            Group {
-                if model.installed {
-                    StudioView(studio: studio, model: model)
-                } else {
-                    ModelSetupView(model: model)
+            StudioView(studio: studio, model: model, meshModel: meshModel)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                    model.refresh()
+                    meshModel.refresh()
                 }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                model.refresh()
-            }
         }
         .defaultSize(width: 1030, height: 690)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Open Image…") { studio.chooseImage() }.keyboardShortcut("o").disabled(!model.installed)
-                Button("Export PLY…") { studio.export("ply") }
-                    .keyboardShortcut("e").disabled(studio.result == nil)
+                Button("Open Image…") { studio.chooseImage() }.keyboardShortcut("o")
+                Button(studio.output == .splat ? "Export PLY…" : "Export Textured GLB…") {
+                    studio.export(studio.output == .splat ? "ply" : "glb")
+                }
+                .keyboardShortcut("e").disabled(!studio.hasResult)
             }
         }
         Settings {
-            StudioSettings(model: model, studio: studio)
+            StudioSettings(model: model, meshModel: meshModel, studio: studio)
         }
     }
 }

@@ -6,11 +6,8 @@ import os
 
 @MainActor
 final class ModelStore: ObservableObject {
-    static let packName = "Idol-MLX-Serve-fp16"
-    static let repository = URL(string: "https://huggingface.co/ddalcu/Idol-MLX-Serve-fp16")!
-    static let defaultDirectory = URL.applicationSupportDirectory
-        .appending(path: "Idol Studio/Models", directoryHint: .isDirectory)
-        .appending(path: packName, directoryHint: .isDirectory)
+    let pack: ModelPack
+    private let defaultDirectory: URL
 
     @Published private(set) var directory: URL
     @Published private(set) var installed = false
@@ -20,42 +17,47 @@ final class ModelStore: ObservableObject {
     private let defaults: UserDefaults
     private var downloadTask: Task<Void, Never>?
     private var downloadID: UUID?
-    private static let preferenceKey = "modelDirectory"
+    private var preferenceKey: String { pack == .idol ? "modelDirectory" : "meshModelDirectory" }
 
-    init(defaults: UserDefaults = .standard) {
+    init(pack: ModelPack = .idol, defaults: UserDefaults = .standard) {
+        self.pack = pack
         self.defaults = defaults
-        directory = defaults.string(forKey: Self.preferenceKey).map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? Self.defaultDirectory
+        defaultDirectory = URL.applicationSupportDirectory
+            .appending(path: "Idol Studio/Models", directoryHint: .isDirectory)
+            .appending(path: pack.folder, directoryHint: .isDirectory)
+        let key = pack == .idol ? "modelDirectory" : "meshModelDirectory"
+        directory = defaults.string(forKey: key).map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? defaultDirectory
         refresh()
     }
 
-    var sizeLabel: String { ByteCountFormatter.string(fromByteCount: ModelPack.totalBytes, countStyle: .file) }
+    var sizeLabel: String { ByteCountFormatter.string(fromByteCount: pack.totalBytes, countStyle: .file) }
 
     func refresh() {
-        installed = ModelPack.isComplete(at: directory)
+        installed = pack.isComplete(at: directory)
     }
 
     func chooseDownloadLocation() {
         let panel = folderPanel(prompt: "Choose Location")
-        panel.message = "Idol Studio will create an \(Self.packName) folder inside the location you choose."
+        panel.message = "Idol Studio will create an \(pack.folder) folder inside the location you choose."
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            select(url.appending(path: Self.packName, directoryHint: .isDirectory))
+            select(url.appending(path: pack.folder, directoryHint: .isDirectory))
         }
     }
 
     func chooseExistingModel() {
         let panel = folderPanel(prompt: "Use Model")
-        panel.message = "Select the folder that contains the FP16 model’s config.json and weight files."
+        panel.message = "Select the folder that contains the model’s config.json and weight files."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard ModelPack.isComplete(at: url) else {
-            error = "This folder doesn’t contain the complete IDOL FP16 model pack. Choose the model folder itself, or use Download Model."
+        guard pack.isComplete(at: url) else {
+            error = "This folder doesn’t contain the complete \(pack.name) model pack. Choose the model folder itself, or use Download Model."
             return
         }
         select(url)
     }
 
-    func useDefaultLocation() { select(Self.defaultDirectory) }
+    func useDefaultLocation() { select(defaultDirectory) }
 
     func reveal() {
         if installed { NSWorkspace.shared.activateFileViewerSelecting([directory]) }
@@ -73,10 +75,10 @@ final class ModelStore: ObservableObject {
     private func select(_ url: URL) {
         guard downloadTask == nil else { return }
         directory = url.standardizedFileURL
-        if directory == Self.defaultDirectory {
-            defaults.removeObject(forKey: Self.preferenceKey)
+        if directory == defaultDirectory {
+            defaults.removeObject(forKey: preferenceKey)
         } else {
-            defaults.set(directory.path, forKey: Self.preferenceKey)
+            defaults.set(directory.path, forKey: preferenceKey)
         }
         error = nil
         refresh()
@@ -88,7 +90,7 @@ final class ModelStore: ObservableObject {
         let target = directory
         let id = UUID()
         downloadID = id
-        download = DownloadProgress(file: "Preparing download…", bytes: 0, total: ModelPack.totalBytes)
+        download = DownloadProgress(file: "Preparing download…", bytes: 0, total: pack.totalBytes)
         downloadTask = Task {
             defer {
                 refresh()
@@ -97,7 +99,7 @@ final class ModelStore: ObservableObject {
                 downloadID = nil
             }
             do {
-                try await ModelPack.install(at: target) { [self] progress in
+                try await pack.install(at: target) { [self] progress in
                     guard downloadID == id, downloadTask?.isCancelled == false,
                           let current = download, progress.bytes >= current.bytes else { return }
                     download = progress
@@ -123,8 +125,19 @@ struct DownloadProgress: Sendable {
     }
 }
 
-enum ModelPack {
-    private static let source = URL(string: "https://huggingface.co/ddalcu/Idol-MLX-Serve-fp16/resolve/5a25e28e33cba0adc0f9ee91e6eff75fee6a5689/")!
+enum ModelPack: Sendable {
+    case idol, hunyuan
+
+    var name: String { self == .idol ? "IDOL" : "Hunyuan3D 2.1" }
+    var folder: String { self == .idol ? "Idol-MLX-Serve-fp16" : "Hunyuan3D-2.1-MLX-Serve-8bit" }
+    var repository: URL { URL(string: "https://huggingface.co/ddalcu/\(folder)")! }
+
+    private var source: URL {
+        let revision = self == .idol ? "5a25e28e33cba0adc0f9ee91e6eff75fee6a5689" : "11ca09dc21a930e9861c0cd19bed0f0507fac232"
+        return repository.appending(path: "resolve/\(revision)", directoryHint: .isDirectory)
+    }
+
+    private var files: [File] { self == .idol ? Self.idolFiles : Self.hunyuanFiles }
 
     private struct File: Sendable {
         let path: String
@@ -143,7 +156,7 @@ enum ModelPack {
         }
     }
 
-    private static let files: [File] = [
+    private static let idolFiles: [File] = [
         File("LICENSE", 11358),
         File("NOTICE", 657),
         File("config.json", 1359),
@@ -158,14 +171,28 @@ enum ModelPack {
         File("vae/model.safetensors", 67882866, "80447208aaf374db90e1f3cd71c638527929a05d985bed9dbbc0fb64e09fd3fe")
     ]
 
-    static let totalBytes = files.reduce(Int64(0)) { $0 + $1.size }
+    private static let hunyuanFiles: [File] = [
+        File("LICENSE", 17915),
+        File("conditioner.safetensors", 325688080, "2d401c3f8614fd5738f8feb8bff78381296191c8f36c73ac3a2b5700f7318a91"),
+        File("config.json", 471),
+        File("dit.safetensors", 3242941850, "67780cf10488c71f6f3ec4b90946d2f87fcc3155eb5d0d26debb9f272e2aa9ea"),
+        File("paint/LICENSE", 17915),
+        File("paint/config.json", 2302),
+        File("paint/dino.safetensors", 1211390571, "5f0433c25beef1d3bb05b775c45ada6a8608a2bc20a3843069526eee41242f97"),
+        File("paint/unet.safetensors", 1720524204, "e1cab9acb9d9243736dd63600d65f9f9368158c3fb688515835b3415f6830ed5"),
+        File("paint/unet_dual.safetensors", 1464526440, "78741c60d12e035c39af91af6321441c2878724a39633e313fe236811e7f6f6a"),
+        File("paint/vae.safetensors", 167335331, "3a85a3c1a8f615782fe26e5362e649c2ec4e4e37dfe61e5415c7526e0e112211"),
+        File("vae.safetensors", 227932915, "53ae311365f50724eab65b5b529c151fc0583d86639866d5619dc85b3b207574")
+    ]
 
-    static func isComplete(at directory: URL) -> Bool {
+    var totalBytes: Int64 { files.reduce(0) { $0 + $1.size } }
+
+    func isComplete(at directory: URL) -> Bool {
         files.allSatisfy { $0.isPresent(in: directory) }
     }
 
     @concurrent
-    static func install(at directory: URL, progress: @escaping @MainActor @Sendable (DownloadProgress) -> Void) async throws {
+    func install(at directory: URL, progress: @escaping @MainActor @Sendable (DownloadProgress) -> Void) async throws {
         let manager = FileManager.default
         let missing = files.filter { !$0.isPresent(in: directory) }
         var finished = totalBytes - missing.reduce(Int64(0)) { $0 + $1.size }
@@ -188,7 +215,7 @@ enum ModelPack {
                 throw StudioError("The download of \(file.path) was incomplete. Try again.")
             }
             await progress(DownloadProgress(file: "Verifying \(file.path)…", bytes: committed + file.size, total: totalBytes))
-            if let expected = file.sha256, try checksum(temporary) != expected {
+            if let expected = file.sha256, try Self.checksum(temporary) != expected {
                 throw StudioError("The checksum for \(file.path) didn’t match. Try the download again.")
             }
             let staged = folder.appending(path: ".idol-\(UUID().uuidString)")

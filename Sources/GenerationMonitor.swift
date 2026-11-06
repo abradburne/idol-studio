@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GenerationMonitor: View {
     let progress: GenerationProgress
+    let output: OutputMode
     private let accent = Color(red: 0.76, green: 0.96, blue: 0.57)
 
     var body: some View {
@@ -20,7 +21,7 @@ struct GenerationMonitor: View {
                 ProgressView().progressViewStyle(.linear)
                     .tint(accent)
             }
-            ForEach(GenerationProgress.Stage.allCases, id: \.self) { stage in
+            ForEach(GenerationProgress.Stage.allCases.filter { $0 != (output == .mesh ? .gaussians : .texture) }, id: \.self) { stage in
                 let complete = stage.rawValue < progress.stage.rawValue
                 let active = stage == progress.stage
                 Label(stage.label, systemImage: complete ? "checkmark.circle.fill" : active ? "circle.inset.filled" : "circle")
