@@ -13,8 +13,34 @@ struct QueueView: View {
     private let queue = JobQueue.shared
 
     var body: some View {
+        VStack(spacing: 0) {
+            controls
+                .padding(16)
+            Divider()
+            Group {
+                if jobs.isEmpty {
+                    ContentUnavailableView("No jobs yet", systemImage: "list.bullet",
+                                           description: Text("Add images or a folder to generate them in order."))
+                } else {
+                    jobList
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 650, minHeight: 390)
+        .task {
+            perform { try QueueWorker.startIfNeeded() }
+            while !Task.isCancelled {
+                do { jobs = try queue.list() }
+                catch { self.error = error.localizedDescription }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private var controls: some View {
         VStack(spacing: 12) {
-            HStack {
+            HStack(spacing: 12) {
                 Picker("Output", selection: $format) {
                     ForEach(JobFormat.allCases) { Text($0.label).tag($0) }
                 }.fixedSize()
@@ -43,49 +69,39 @@ struct QueueView: View {
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if jobs.isEmpty {
-                ContentUnavailableView("No jobs yet", systemImage: "list.bullet",
-                                       description: Text("Add images or a folder to generate them in order."))
-            } else {
-                List(jobs.reversed()) { job in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(job.name).fontWeight(.medium).lineLimit(1)
-                            Text(job.format.label + " · " + (job.progress?.title ?? job.state.rawValue.capitalized))
-                                .font(.caption).foregroundStyle(.secondary)
-                            if let fraction = job.progress?.fraction {
-                                ProgressView(value: fraction).frame(maxWidth: 210)
-                            }
-                            if let detail = job.error {
-                                Text(detail).font(.caption).foregroundStyle(.red)
-                            }
-                        }
-                        Spacer()
-                        switch job.state {
-                        case .queued, .running:
-                            Button("Cancel") { perform { try queue.cancel(job.id) } }
-                        case .failed, .cancelled:
-                            Button("Retry") { perform { try queue.retry(job.id); try QueueWorker.startIfNeeded() } }
-                        case .completed:
-                            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([queue.output(job)]) }
-                        case .cancelling:
-                            ProgressView().controlSize(.small)
-                        }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var jobList: some View {
+        List(jobs.reversed()) { job in
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(job.name).fontWeight(.medium).lineLimit(1)
+                    Text(job.format.label + " · " + (job.progress?.title ?? job.state.rawValue.capitalized))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let fraction = job.progress?.fraction {
+                        ProgressView(value: fraction).frame(maxWidth: 210)
                     }
-                    .padding(.vertical, 4)
+                    if let detail = job.error {
+                        Text(detail).font(.caption).foregroundStyle(.red)
+                    }
+                }
+                Spacer()
+                switch job.state {
+                case .queued, .running:
+                    Button("Cancel") { perform { try queue.cancel(job.id) } }
+                case .failed, .cancelled:
+                    Button("Retry") { perform { try queue.retry(job.id); try QueueWorker.startIfNeeded() } }
+                case .completed:
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([queue.output(job)]) }
+                case .cancelling:
+                    ProgressView().controlSize(.small)
                 }
             }
+            .padding(.vertical, 4)
         }
-        .padding(16)
-        .frame(minWidth: 650, minHeight: 390)
-        .task {
-            perform { try QueueWorker.startIfNeeded() }
-            while !Task.isCancelled {
-                do { jobs = try queue.list() }
-                catch { self.error = error.localizedDescription }
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
+        .listStyle(.plain)
     }
 
     private func perform(_ work: () throws -> Void) {
