@@ -1,8 +1,10 @@
 # Idol Studio
 
-## [⬇ Download for Mac](https://github.com/abradburne/idol-studio/releases/download/v0.3/Idol-Studio-0.3.dmg)
+## [⬇ Download for Mac](https://github.com/abradburne/idol-studio/releases/latest/download/Idol-Studio.dmg)
 
 Apple Silicon · macOS 26.2+ · Signed and notarized
+
+<!-- Attach the signed, notarized DMG as Idol-Studio.dmg before publishing each release. -->
 
 Turn a single image into a 3D Gaussian splat on your Mac. Drop or paste a photo or render, generate with IDOL, and inspect the result in an interactive Metal viewer. Everything runs locally.
 
